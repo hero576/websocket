@@ -1,7 +1,6 @@
 package wsconn
 
 import (
-	"fmt"
 	"github.com/astaxie/beego/logs"
 	"github.com/gorilla/websocket"
 	"log"
@@ -35,7 +34,6 @@ func (w *WebsocketServer) WsHandle(writer http.ResponseWriter, request *http.Req
 	//writer.Write([]byte("hello world"))
 
 	var (
-		msgType  int
 		data     []byte
 		err      error
 		upgrader = websocket.Upgrader{
@@ -43,15 +41,14 @@ func (w *WebsocketServer) WsHandle(writer http.ResponseWriter, request *http.Req
 			CheckOrigin: func(r *http.Request) bool {
 				return true
 			}}
-		con *websocket.Conn
+		wsConn *websocket.Conn
+		conn   *Connection
 	)
 
 	//upgrade websocket
-	con, err = upgrader.Upgrade(writer, request, nil)
+	wsConn, err = upgrader.Upgrade(writer, request, nil)
 	defer func() {
-		if err := con.Close(); err != nil {
-			logs.Error(err)
-		}
+		conn.Close()
 	}()
 	if err != nil {
 		if _, err := writer.Write([]byte(err.Error())); err != nil {
@@ -59,18 +56,33 @@ func (w *WebsocketServer) WsHandle(writer http.ResponseWriter, request *http.Req
 		}
 	}
 
-	//websocket conn
-	for {
-		msgType, data, err = con.ReadMessage()
-		if err != nil {
-			if _, err := writer.Write([]byte(err.Error())); err != nil {
-				logs.Error(err)
+	if conn, err = initConnection(wsConn); err != nil {
+		logs.Error("init websocket connect err", err)
+		goto ERR
+	}
+
+	go func() {
+		var (
+			err error
+		)
+		for {
+			if err = conn.WriteMessage([]byte("heartbeat")); err != nil {
+				logs.Error("send heartbeat err", err)
+				return
 			}
-			break
+			time.Sleep(1 * time.Second)
 		}
-		fmt.Println("client msg:", msgType, string(data))
-		if err := con.WriteMessage(websocket.TextMessage, []byte(time.Now().String())); err != nil {
-			logs.Error(err)
+	}()
+
+	for {
+		if data, err = conn.ReadMessage(); err != nil {
+			goto ERR
+		}
+		if err = conn.WriteMessage(data); err != nil {
+			goto ERR
 		}
 	}
+
+ERR:
+	conn.Close()
 }
